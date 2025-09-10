@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetScore</title>
+  
+  <!-- Chart library for the graphs -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  
+  <!-- Plaid's library for bank connections -->
+  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+  
+  <style>
+    /* Reset everything. Start clean. */
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    /* Black background. White text. Simple. */
+    body {
+      background: #0a0a0a;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      padding: 20px;
+      overflow-x: hidden;
+    }
+    
+    /* Top bar. Logo left. High score right. */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 30px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #222;
+    }
+    
+    /* NetScore branding */
+    .logo {
+      font-size: 28px;
+      font-weight: 200;
+      letter-spacing: -1px;
+    }
+    
+    /* All-time high display */
+    .ath {
+      text-align: right;
+    }
+    
+    .ath-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    
+    .ath-value {
+      font-size: 24px;
+      color: #4ade80; /* Green for winning */
+      font-weight: 300;
+    }
+    
+    /* Button row */
+    .controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 30px;
+    }
+    
+    /* Dark minimal buttons */
+    button {
+      background: #111;
+      border: 1px solid #333;
+      color: #fff;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+    
+    button:hover {
+      background: #1a1a1a;
+      border-color: #444;
+    }
+    
+    button:active {
+      transform: scale(0.98); /* Subtle click feedback */
+    }
+    
+    /* Chart grid. Stack vertical on small screen. */
+    .charts {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 30px;
+    }
+    
+    /* Each chart container */
+    .chart-container {
+      background: #111;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 20px;
+      height: 200px;
+      position: relative;
+    }
+    
+    /* Small title above each chart */
+    .chart-title {
+      font-size: 12px;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 15px;
+    }
+    
+    /* Big number in top right of each chart */
+    .current-value {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      font-size: 20px;
+      font-weight: 300;
+    }
+    
+    /* Color coding for money */
+    .positive { color: #4ade80; } /* Green = good */
+    .negative { color: #f87171; } /* Red = debt */
+    .neutral { color: #888; }      /* Gray = zero */
+    
+    /* Keep charts small */
+    canvas {
+      max-height: 140px !important;
+    }
+    
+    /* Loading state */
+    .loading {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: #666;
+    }
+    
+    /* Green popup when data refreshes */
+    .refresh-indicator {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: #4ade80;
+      color: #000;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    
+    .refresh-indicator.show {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header bar -->
+  <div class="header">
+    <div class="logo">Nova</div>
+    <div class="ath">
+      <div class="ath-label">All Time High</div>
+      <div class="ath-value" id="ath">—</div>
+    </div>
+  </div>
+  
+  <!-- Control buttons -->
+  <div class="controls">
+    <button onclick="refreshData()">Refresh Now</button>
+    <button onclick="initPlaidLink('wells_fargo')">Link Wells Fargo</button>
+    <button onclick="initPlaidLink('robinhood')">Link Robinhood</button>
+    <button onclick="initPlaidLink('vanguard')">Link Vanguard</button>
+  </div>
+  
+  <!-- Three charts stacked -->
+  <div class="charts">
+    <!-- Total net worth chart -->
+    <div class="chart-container">
+      <div class="chart-title">Net Worth</div>
+      <div class="current-value" id="net-worth-value">—</div>
+      <canvas id="net-worth-chart"></canvas>
+    </div>
+    
+    <!-- Wells Fargo net (checking minus credit card) -->
+    <div class="chart-container">
+      <div class="chart-title">Wells Fargo (Checking - Credit)</div>
+      <div class="current-value" id="wells-value">—</div>
+      <canvas id="wells-chart"></canvas>
+    </div>
+    
+    <!-- Combined investment accounts -->
+    <div class="chart-container">
+      <div class="chart-title">Investment Accounts</div>
+      <div class="current-value" id="investments-value">—</div>
+      <canvas id="investments-chart"></canvas>
+    </div>
+  </div>
+  
+  <!-- Hidden refresh confirmation -->
+  <div class="refresh-indicator" id="refresh-indicator">Refreshed</div>
+  
+  <script>
+    // Chart.js configuration - minimal, clean
+    const chartOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: 'index',
+        intersect: false,
+      },
+      plugins: {
+        legend: { display: false }, // No legend needed
+        tooltip: {
+          backgroundColor: 'rgba(0,0,0,0.8)',
+          titleColor: '#fff',
+          bodyColor: '#fff',
+          borderColor: '#333',
+          borderWidth: 1,
+          displayColors: false,
+          callbacks: {
+            // Format tooltips as currency
+            label: (context) => '$' + context.parsed.y.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})
+          }
+        }
+      },
+      scales: {
+        x: { display: false }, // No x-axis labels
+        y: { display: false }, // No y-axis labels
+      },
+      elements: {
+        line: {
+          tension: 0.4,      // Smooth curves
+          borderWidth: 2,
+        },
+        point: {
+          radius: 0,         // No dots on line
+          hitRadius: 10,     // But clickable area
+          hoverRadius: 5,    // Show on hover
+        }
+      }
+    };
+    
+    // Store chart instances
+    let charts = {};
+    
+    // Make numbers look like money
+    function formatCurrency(value) {
+      return '$' + Math.abs(value).toLocaleString('en-US', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+    }
+    
+    // Pick color based on value
+    function getValueClass(value) {
+      return value > 0 ? 'positive' : value < 0 ? 'negative' : 'neutral';
+    }
+    
+    // Pull data from backend and update everything
+    async function loadData() {
+      try {
+        // Get history and all-time high
+        const [historyRes, athRes] = await Promise.all([
+          fetch('/api/history?days=90'),
+          fetch('/api/ath')
+        ]);
+        
+        const history = await historyRes.json();
+        const ath = await athRes.json();
+        
+        // Show the high score
+        document.getElementById('ath').textContent = formatCurrency(ath.value);
+        
+        // No data? Stop here.
+        if (history.length === 0) return;
+        
+        // Extract data for charts
+        const labels = history.map(h => h.date);
+        const netWorthData = history.map(h => h.net_worth);
+        const wellsData = history.map(h => h.wells_fargo_checking - h.wells_fargo_credit);
+        const investmentsData = history.map(h => h.robinhood + h.vanguard);
+        
+        // Get most recent values for display
+        const latest = history[history.length - 1];
+        const wellsNet = latest.wells_fargo_checking - latest.wells_fargo_credit;
+        const investmentsTotal = latest.robinhood + latest.vanguard;
+        
+        // Update the big numbers on each chart
+        document.getElementById('net-worth-value').textContent = formatCurrency(latest.net_worth);
+        document.getElementById('net-worth-value').className = 'current-value ' + getValueClass(latest.net_worth);
+        
+        document.getElementById('wells-value').textContent = formatCurrency(wellsNet);
+        document.getElementById('wells-value').className = 'current-value ' + getValueClass(wellsNet);
+        
+        document.getElementById('investments-value').textContent = formatCurrency(investmentsTotal);
+        document.getElementById('investments-value').className = 'current-value ' + getValueClass(investmentsTotal);
+        
+        // Draw the charts
+        updateChart('net-worth-chart', labels, netWorthData, '#4ade80');                              // Green
+        updateChart('wells-chart', labels, wellsData, wellsNet >= 0 ? '#60a5fa' : '#f87171');       // Blue or red
+        updateChart('investments-chart', labels, investmentsData, '#a78bfa');                        // Purple
+        
+      } catch (error) {
+        console.error('Load error:', error);
+      }
+    }
+    
+    // Create or update a chart
+    function updateChart(canvasId, labels, data, color) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      
+      // Kill old chart if exists
+      if (charts[canvasId]) {
+        charts[canvasId].destroy();
+      }
+      
+      // Make new chart
+      charts[canvasId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            data: data,
+            borderColor: color,
+            backgroundColor: color + '20', // Transparent fill
+            fill: true,
+          }]
+        },
+        options: chartOptions
+      });
+    }
+    
+    // Manual refresh button - pull fresh data now
+    async function refreshData() {
+      const indicator = document.getElementById('refresh-indicator');
+      try {
+        // Tell backend to pull from banks
+        await fetch('/api/refresh', { method: 'POST' });
+        // Reload charts
+        await loadData();
+        // Flash green confirmation
+        indicator.classList.add('show');
+        setTimeout(() => indicator.classList.remove('show'), 2000);
+      } catch (error) {
+        console.error('Refresh error:', error);
+      }
+    }
+    
+    // Connect new bank account through Plaid
+    async function initPlaidLink(institution) {
+      try {
+        // Step 1: Get link token from our backend
+        const response = await fetch('/api/link/token', { method: 'POST' });
+        const data = await response.json();
+        
+        // Step 2: Open Plaid popup
+        const handler = Plaid.create({
+          token: data.link_token,
+          onSuccess: async (public_token) => {
+            // Step 3: Send token to backend for permanent access
+            await fetch('/api/link/exchange', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ public_token, institution })
+            });
+            // Pull fresh data
+            await refreshData();
+          },
+          onExit: (err, metadata) => {
+            if (err) console.error('Plaid error:', err);
+          }
+        });
+        
+        handler.open();
+      } catch (error) {
+        console.error('Plaid init error:', error);
+      }
+    }
+    
+    // Load data when page opens
+    loadData();
+    
+    // Refresh charts every hour automatically
+    setInterval(loadData, 60 * 60 * 1000);
+  </script>
+</body>
+</html>
