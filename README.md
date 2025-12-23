@@ -1,4 +1,4 @@
-# Nova
+# Stripe Leaderboard
 
 ## Setup
 
